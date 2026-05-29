@@ -108,6 +108,11 @@ class WorkflowDetailScreen(Screen):
     def on_mount(self) -> None:
         self._load_workflow()
 
+    def _check_logs_for_dask(self, log_paths: list[str]) -> bool:
+        from snkmt.console.dask_monitor import scan_log_files
+        scanned = scan_log_files(log_paths)
+        return len(scanned) > 0
+
     @work(exclusive=True)
     async def _load_workflow(self) -> None:
         workflow = await self.repo.get(self.workflow_id)
@@ -131,6 +136,28 @@ class WorkflowDetailScreen(Screen):
             errors = self.query_one(WorkflowErrors)
             errors.workflow_id = self.workflow_id
         except NoMatches:
+            pass
+
+        # Auto-detect Dask/Condor from job logs
+        try:
+            jobs = await self.repo.list_jobs(self.workflow_id)
+            log_paths = [lf.path for j in jobs for lf in j.log_files]
+            if log_paths:
+                has_dask = await self.app.run_worker(
+                    self._check_logs_for_dask,
+                    log_paths,
+                    thread=True
+                )
+                if has_dask:
+                    tabs = self.query_one("#detail-bottom-tabs", TabbedContent)
+                    try:
+                        tabs.query_one("#tab-dask")
+                    except NoMatches:
+                        from snkmt.console.dask_panel import DaskJobPanel
+                        panel = DaskJobPanel(self.repo, id="detail-dask")
+                        panel.workflow_id = self.workflow_id
+                        await tabs.add_pane(TabPane("Dask & Condor", panel, id="tab-dask"))
+        except Exception:
             pass
 
     @on(RuleTable.RowSelected, "#detail-rule-table")
