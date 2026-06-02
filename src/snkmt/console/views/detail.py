@@ -138,24 +138,44 @@ class WorkflowDetailScreen(Screen):
         except NoMatches:
             pass
 
-        # Auto-detect Dask/Condor from job logs
+        # Auto-detect Dask/Condor from workflow metadata and logs
         try:
+            cmd = (workflow.command_line or "").lower()
+            sf = (workflow.snakefile or "").lower()
             jobs = await self.repo.list_jobs(self.workflow_id)
             log_paths = [lf.path for j in jobs for lf in j.log_files]
-            if log_paths:
-                has_dask = await self.app.run_worker(
+
+            is_dask = (
+                "condor" in cmd or 
+                "dask" in cmd or 
+                "runner.py" in cmd or 
+                "barista" in sf or 
+                "condor" in sf or 
+                "dask" in sf
+            )
+            
+            if not is_dask:
+                for path in log_paths:
+                    path_lower = path.lower()
+                    if "condor" in path_lower or "dask" in path_lower:
+                        is_dask = True
+                        break
+
+            if not is_dask and log_paths:
+                is_dask = await self.app.run_worker(
                     lambda: self._check_logs_for_dask(log_paths),
                     thread=True
                 )
-                if has_dask:
-                    tabs = self.query_one("#detail-bottom-tabs", TabbedContent)
-                    try:
-                        tabs.query_one("#tab-dask")
-                    except NoMatches:
-                        from snkmt.console.dask_panel import DaskJobPanel
-                        panel = DaskJobPanel(self.repo, id="detail-dask")
-                        panel.workflow_id = self.workflow_id
-                        await tabs.add_pane(TabPane("Dask & Condor", panel, id="tab-dask"))
+
+            if is_dask:
+                tabs = self.query_one("#detail-bottom-tabs", TabbedContent)
+                try:
+                    tabs.query_one("#tab-dask")
+                except NoMatches:
+                    from snkmt.console.dask_panel import DaskJobPanel
+                    panel = DaskJobPanel(self.repo, id="detail-dask")
+                    panel.workflow_id = self.workflow_id
+                    await tabs.add_pane(TabPane("Dask & Condor", panel, id="tab-dask"))
         except Exception:
             pass
 
