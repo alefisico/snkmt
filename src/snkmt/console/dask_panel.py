@@ -148,9 +148,7 @@ class DaskJobPanel(VerticalScroll):
 
             # 2. Run blocking telemetry calls (log reading, HTTP, SSH, condor) in a thread worker
             worker = self.run_worker(
-                self._fetch_telemetry_thread,
-                log_paths,
-                job_statuses,
+                lambda: self._fetch_telemetry_thread(log_paths, job_statuses),
                 thread=True
             )
             telemetry_data = await worker.wait()

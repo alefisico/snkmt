@@ -144,8 +144,7 @@ class WorkflowDetailScreen(Screen):
             log_paths = [lf.path for j in jobs for lf in j.log_files]
             if log_paths:
                 has_dask = await self.app.run_worker(
-                    self._check_logs_for_dask,
-                    log_paths,
+                    lambda: self._check_logs_for_dask(log_paths),
                     thread=True
                 )
                 if has_dask:
