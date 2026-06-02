@@ -42,6 +42,22 @@ def render_progress_bar(progress: float, width: int = 8) -> Text:
     return Text(pct, style=color)
 
 
+def get_friendly_snakefile_name(snakefile_path: Optional[str], db_path: Optional[str] = None) -> str:
+    if not snakefile_path:
+        return "N/A"
+    
+    if "snakemake/workflow.py" in snakefile_path:
+        if db_path:
+            p = Path(db_path)
+            if len(p.parts) >= 3:
+                return p.parts[-3]
+            elif len(p.parts) >= 2:
+                return p.parts[-2]
+        return Path.cwd().name
+
+    return Path(snakefile_path).name
+
+
 class StyledStatus(Text):
     def __init__(self, status: Status) -> None:
         status_str = status.value.capitalize()
@@ -281,7 +297,8 @@ class WorkflowTable(DataTable):
     def _workflow_to_row(self, workflow: WorkflowDTO) -> List[TextType]:
         workflow_id = str(workflow.id)
         status = StyledStatus(workflow.status)
-        snakefile = Path(workflow.snakefile).name if workflow.snakefile else "N/A"
+        db_path = getattr(self.app, "current_source", None)
+        snakefile = get_friendly_snakefile_name(workflow.snakefile, db_path)
         started_at = (
             workflow.started_at.strftime("%Y-%m-%d %H:%M:%S")
             if workflow.started_at
@@ -449,8 +466,9 @@ class WorkflowDetailOverview(Container):
 
         try:
             self.query_one("#overview-id", Label).update(str(new_data.id))
+            db_path = getattr(self.app, "current_source", None)
             self.query_one("#overview-snakefile", Label).update(
-                Path(new_data.snakefile).name if new_data.snakefile else "N/A"
+                get_friendly_snakefile_name(new_data.snakefile, db_path)
             )
             self.query_one("#overview-status", Label).update(
                 StyledStatus(new_data.status)
