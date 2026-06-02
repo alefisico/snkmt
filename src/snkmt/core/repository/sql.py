@@ -24,8 +24,69 @@ from snkmt.types.dto import (
 
 
 class SQLAlchemyWorkflowRepository(WorkflowRepository):
+    _snakefile_cache = {}
+    _rule_map_cache = None
+
     def __init__(self, session_factory: async_sessionmaker):
         self.async_session = session_factory
+
+    async def _resolve_real_snakefile(self, session, workflow_id: UUID) -> Optional[str]:
+        if workflow_id in self._snakefile_cache:
+            return self._snakefile_cache[workflow_id]
+
+        import re
+        import os
+        import glob
+        from pathlib import Path
+        from snkmt.core.models import Rule
+
+        # 1. Fetch rule names for this workflow
+        rules_result = await session.execute(
+            select(Rule.name).where(Rule.workflow_id == workflow_id)
+        )
+        rule_names = [r[0] for r in rules_result.fetchall() if r[0]]
+        if not rule_names:
+            return None
+
+        # 2. Build the rule-to-file map of the workspace if not cached
+        if self._rule_map_cache is None:
+            rule_map = {}
+            patterns = ["**/*.smk", "**/Snakefile*"]
+            files = []
+            for pat in patterns:
+                files.extend(glob.glob(pat, recursive=True))
+
+            rule_re = re.compile(r"^\s*rule\s+(\w+)\s*:")
+
+            for f in files:
+                if ".pixi" in f or "site-packages" in f or ".git" in f:
+                    continue
+                abs_path = os.path.abspath(f)
+                try:
+                    with open(abs_path, "r", errors="ignore") as file_obj:
+                        for line in file_obj:
+                            m = rule_re.match(line)
+                            if m:
+                                rule_name = m.group(1)
+                                rule_map.setdefault(rule_name, []).append(abs_path)
+                except OSError:
+                    pass
+            self._rule_map_cache = rule_map
+
+        # 3. Score each .smk file by how many rules it matches
+        scores = {}
+        for rule in rule_names:
+            matching_files = self._rule_map_cache.get(rule, [])
+            for f in matching_files:
+                scores[f] = scores.get(f, 0) + 1
+
+        if not scores:
+            return None
+
+        # Find the file with the highest match score
+        best_file = max(scores, key=scores.get)
+        self._snakefile_cache[workflow_id] = best_file
+        return best_file
 
     async def get(self, workflow_id: UUID) -> Optional[WorkflowDTO]:
         async with self.async_session() as session:
@@ -33,7 +94,14 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
                 select(Workflow).where(Workflow.id == workflow_id)
             )
             workflow = result.scalar_one_or_none()
-            return self._workflow_to_dto(workflow) if workflow else None
+            if not workflow:
+                return None
+            dto = self._workflow_to_dto(workflow)
+            if dto.snakefile and "snakemake/workflow.py" in dto.snakefile:
+                real_snakefile = await self._resolve_real_snakefile(session, workflow.id)
+                if real_snakefile:
+                    dto.snakefile = real_snakefile
+            return dto
 
     async def delete(self, workflow_id: UUID) -> bool:
         async with self.async_session() as session:
@@ -119,7 +187,15 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
 
             result = await session.execute(stmt)
             workflows = result.scalars().all()
-            return [self._workflow_to_dto(w) for w in workflows]
+            dtos = []
+            for w in workflows:
+                dto = self._workflow_to_dto(w)
+                if dto.snakefile and "snakemake/workflow.py" in dto.snakefile:
+                    real_snakefile = await self._resolve_real_snakefile(session, w.id)
+                    if real_snakefile:
+                        dto.snakefile = real_snakefile
+                dtos.append(dto)
+            return dtos
 
     async def count(
         self,
