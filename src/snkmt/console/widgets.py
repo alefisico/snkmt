@@ -465,8 +465,12 @@ class WorkflowDetailOverview(Container):
             self.query_one("#overview-jobs-total", Label).update(
                 str(new_data.total_job_count)
             )
+            cmd_display = new_data.command_line
+            if not cmd_display and new_data.snakefile:
+                cmd_display = f"snakemake -s {new_data.snakefile}"
+
             self.query_one("#overview-command", Label).update(
-                new_data.command_line or "N/A"
+                cmd_display or "N/A"
             )
         except NoMatches:
             pass
