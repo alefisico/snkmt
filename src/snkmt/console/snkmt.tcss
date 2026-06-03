@@ -110,9 +110,9 @@ WorkflowTable {
 }
 
 #overview-command {
-    overflow-x: auto;
-    height: 3;
-    margin-bottom: 0;
+    text-wrap: wrap;
+    height: auto;
+    margin-bottom: 1;
 }
 
 #detail-middle {
