@@ -183,3 +183,129 @@ def test_legacy_database(temp_db_path, caplog):
         )
 
         assert f"Legacy database stamped with revision: {desired_rev}" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_workflow_cascade_delete(temp_db_path):
+    from uuid import uuid4
+    from datetime import datetime, timezone
+    from snkmt.types.dto import WorkflowDTO, CreateRuleDTO, CreateJobDTO
+    from snkmt.types.enums import Status
+
+    async_db = AsyncDatabase(db_path=str(temp_db_path), create_db=True)
+    repo = async_db.get_workflow_repository()
+
+    wf_id = uuid4()
+    now = datetime.now(timezone.utc)
+    wf_dto = WorkflowDTO(
+        id=wf_id,
+        status=Status.RUNNING,
+        name="test_workflow",
+        total_job_count=10,
+        jobs_finished=0,
+        started_at=now,
+        updated_at=now,
+        dryrun=False,
+    )
+
+    # Create workflow
+    created_wf_id = await repo.create(wf_dto)
+    assert created_wf_id == wf_id
+
+    # Create rule
+    rule_id = await repo.create_rule(wf_id, CreateRuleDTO(name="test_rule", total_job_count=5))
+    assert rule_id is not None
+
+    # Create job
+    job = await repo.create_job(
+        wf_id,
+        rule_id,
+        CreateJobDTO(
+            snakemake_id=1,
+            status=Status.RUNNING,
+            threads=1,
+            started_at=now,
+        )
+    )
+    assert job is not None
+
+    # Verify they exist
+    wf = await repo.get(wf_id)
+    assert wf is not None
+
+    rules = await repo.list_rules(wf_id, status=None)
+    assert len(rules) == 1
+
+    jobs = await repo.list_rule_jobs(wf_id, rule_id)
+    assert len(jobs) == 1
+
+    # Now delete workflow
+    success = await repo.delete(wf_id)
+    assert success is True
+
+    # Verify it is deleted
+    assert await repo.get(wf_id) is None
+
+    # Let's check rules and jobs are also gone in the DB
+    async with async_db.get_session()() as session:
+        from sqlalchemy import select
+        from snkmt.core.models import Rule, Job
+
+        rules_in_db = (await session.execute(select(Rule).where(Rule.workflow_id == wf_id))).scalars().all()
+        assert len(rules_in_db) == 0
+
+        jobs_in_db = (await session.execute(select(Job).where(Job.workflow_id == wf_id))).scalars().all()
+        assert len(jobs_in_db) == 0
+
+    await async_db.close()
+
+
+@pytest.mark.asyncio
+async def test_workflow_prune(temp_db_path):
+    from uuid import uuid4
+    from datetime import datetime, timedelta, timezone
+    from snkmt.types.dto import WorkflowDTO
+    from snkmt.types.enums import Status
+
+    async_db = AsyncDatabase(db_path=str(temp_db_path), create_db=True)
+    repo = async_db.get_workflow_repository()
+
+    # Create one old workflow and one new workflow
+    wf1_id = uuid4()
+    now = datetime.now(timezone.utc)
+    wf1 = WorkflowDTO(
+        id=wf1_id,
+        status=Status.SUCCESS,
+        name="old_wf",
+        total_job_count=1,
+        jobs_finished=1,
+        started_at=now - timedelta(days=10),
+        updated_at=now - timedelta(days=10),
+        dryrun=False,
+    )
+    await repo.create(wf1)
+
+    wf2_id = uuid4()
+    wf2 = WorkflowDTO(
+        id=wf2_id,
+        status=Status.RUNNING,
+        name="new_wf",
+        total_job_count=1,
+        jobs_finished=0,
+        started_at=now,
+        updated_at=now,
+        dryrun=False,
+    )
+    await repo.create(wf2)
+
+    # Prune workflows older than 5 days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=5)
+    deleted = await repo.prune(before_date=cutoff)
+    assert deleted == 1
+
+    # Check wf1 is deleted, wf2 is not
+    assert await repo.get(wf1_id) is None
+    assert await repo.get(wf2_id) is not None
+
+    await async_db.close()
+

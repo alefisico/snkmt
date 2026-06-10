@@ -142,3 +142,12 @@ class WorkflowRepository(ABC):
     ) -> List[JobDTO]:
         """List jobs for a workflow with optional filters"""
         pass
+
+    @abstractmethod
+    async def prune(
+        self,
+        before_date: Optional[datetime] = None,
+        status: Optional[Status] = None,
+    ) -> int:
+        """Prune workflows matching the criteria. Returns count of deleted workflows."""
+        pass

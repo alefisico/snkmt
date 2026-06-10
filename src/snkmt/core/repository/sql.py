@@ -125,9 +125,10 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
                 dryrun=workflow.dryrun,
                 command_line=workflow.command_line,
             )
+            wf_id = new_workflow.id
             session.add(new_workflow)
             await session.commit()
-            return new_workflow.id
+            return wf_id
 
     async def update(self, update: UpdateWorkflowDTO) -> bool:
         async with self.async_session() as session:
@@ -585,3 +586,28 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
         return FileDTO(
             id=file.id, job_id=file.job_id, path=file.path, file_type=file.file_type
         )
+
+    async def prune(
+        self,
+        before_date: Optional[datetime] = None,
+        status: Optional[Status] = None,
+    ) -> int:
+        async with self.async_session() as session:
+            stmt = select(Workflow)
+            if before_date:
+                stmt = stmt.where(Workflow.started_at < before_date)
+            if status:
+                stmt = stmt.where(Workflow.status == status)
+
+            result = await session.execute(stmt)
+            workflows = result.scalars().all()
+
+            deleted_count = 0
+            for workflow in workflows:
+                await session.delete(workflow)
+                deleted_count += 1
+
+            if deleted_count > 0:
+                await session.commit()
+
+            return deleted_count

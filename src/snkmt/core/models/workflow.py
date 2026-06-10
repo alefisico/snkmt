@@ -42,6 +42,7 @@ class Workflow(Base):
     jobs: Mapped[list["Job"]] = relationship(
         "Job",
         back_populates="workflow",
+        cascade="all, delete-orphan",
         lazy="dynamic",
     )
     errors: Mapped[list["Error"]] = relationship(

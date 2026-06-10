@@ -236,6 +236,107 @@ def db_stamp(
             pass
 
 
+@db_app.command("prune")
+def db_prune(
+    days: Optional[int] = typer.Option(
+        None,
+        "--days",
+        "-a",
+        help="Prune workflows older than this many days.",
+    ),
+    status: Optional[str] = typer.Option(
+        None,
+        "--status",
+        "-s",
+        help="Prune workflows with this status (running, success, error, unknown).",
+    ),
+    db: Optional[str] = typer.Option(
+        None,
+        "--db-path",
+        "-d",
+        help="Database path (default: user data dir).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Skip confirmation prompt.",
+    ),
+    verbose: bool = VerboseOption,
+):
+    """Delete old or unwanted workflows from the database."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from snkmt.core.db.session import AsyncDatabase
+    from snkmt.types.enums import Status
+
+    # Parse status
+    db_status = None
+    if status:
+        try:
+            db_status = Status(status.upper())
+        except ValueError:
+            typer.echo(
+                f"Error: Invalid status '{status}'. Valid options are: running, success, error, unknown",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+    # Parse before_date
+    before_date = None
+    if days is not None:
+        if days < 0:
+            typer.echo("Error: --days must be non-negative", err=True)
+            raise typer.Exit(1)
+        before_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+    if days is None and status is None:
+        typer.echo("Error: Please specify either --days (-d) or --status (-s) to select workflows to prune.", err=True)
+        raise typer.Exit(1)
+
+    async def run_prune():
+        try:
+            async_db = AsyncDatabase(db_path=db, create_db=False)
+            repo = async_db.get_workflow_repository()
+            
+            # Let's count how many match first
+            workflows = await repo.list(
+                status=db_status,
+                limit=None,
+            )
+            
+            to_delete = []
+            for w in workflows:
+                if before_date and (w.started_at is None or w.started_at >= before_date):
+                    continue
+                to_delete.append(w)
+                
+            if not to_delete:
+                typer.echo("No workflows found matching the criteria.")
+                await async_db.close()
+                return
+                
+            typer.echo(f"Found {len(to_delete)} workflows matching criteria.")
+            if not force:
+                if not confirm("Are you sure you want to delete them?"):
+                    typer.echo("Aborted.")
+                    await async_db.close()
+                    raise typer.Abort()
+            
+            deleted_count = 0
+            for w in to_delete:
+                if await repo.delete(w.id):
+                    deleted_count += 1
+                    
+            typer.echo(f"Successfully pruned {deleted_count} workflows.")
+            await async_db.close()
+        except Exception as e:
+            typer.echo(f"Error during pruning: {e}", err=True)
+            raise typer.Exit(1)
+
+    asyncio.run(run_prune())
+
+
 #### CONFIG APP COMMANDS
 @config_app.callback()
 def config_callback(verbose: bool = VerboseOption):

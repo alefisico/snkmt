@@ -68,7 +68,7 @@ class Database:
             future=True,
         )
         self.SessionLocal = sessionmaker(
-            autocommit=False, autoflush=True, bind=self.engine
+            autocommit=False, autoflush=True, bind=self.engine, expire_on_commit=False
         )
         self.session = self.get_session()
         self.auto_migrate = auto_migrate
@@ -317,7 +317,7 @@ class AsyncDatabase:
         )
 
         self.SessionLocal = async_sessionmaker(
-            autocommit=False, autoflush=True, bind=self.engine, class_=AsyncSession
+            autocommit=False, autoflush=True, bind=self.engine, class_=AsyncSession, expire_on_commit=False
         )
 
     # Delegate all sync operations to the sync database
