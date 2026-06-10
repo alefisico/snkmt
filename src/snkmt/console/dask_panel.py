@@ -113,52 +113,61 @@ class DaskJobPanel(VerticalScroll):
 
     def on_mount(self) -> None:
         self._mounted = True
-        self.set_interval(1, self._poll)
+        self._poll_loop()
 
     def watch_workflow_id(self) -> None:
         self._metrics = {}
         self._history = {}
         self._refresh_display()
+        if self._mounted:
+            self._poll_loop()
 
     @work(exclusive=True)
-    async def _poll(self) -> None:
-        if self.workflow_id is None or not self._mounted:
-            return
+    async def _poll_loop(self) -> None:
+        import asyncio
+        from textual.worker import WorkerCancelled
 
-        try:
-            # 1. Fetch running/active jobs from DB on main event loop
-            jobs = await self.repo.list_jobs(self.workflow_id)
-            if not jobs:
-                self._metrics = {}
-                self._refresh_display()
-                return
+        delay = getattr(self.app, "refresh_interval", 3.0)
+        if delay < 1.0:
+            delay = 1.0
 
-            # Keep track of job statuses by log path
-            job_statuses = {}
-            log_paths = []
-            for j in jobs:
-                for lf in j.log_files:
-                    job_statuses[lf.path] = j.status
-                    log_paths.append(lf.path)
+        while self._mounted and self.workflow_id is not None:
+            try:
+                # 1. Fetch running/active jobs from DB on main event loop
+                jobs = await self.repo.list_jobs(self.workflow_id)
+                if not jobs:
+                    self._metrics = {}
+                    self._refresh_display()
+                else:
+                    # Keep track of job statuses by log path
+                    job_statuses = {}
+                    log_paths = []
+                    for j in jobs:
+                        for lf in j.log_files:
+                            job_statuses[lf.path] = j.status
+                            log_paths.append(lf.path)
 
-            if not log_paths:
-                self._metrics = {}
-                self._refresh_display()
-                return
+                    if not log_paths:
+                        self._metrics = {}
+                        self._refresh_display()
+                    else:
+                        # 2. Run blocking telemetry calls (log reading, HTTP, SSH, condor) in a thread worker
+                        worker = self.run_worker(
+                            lambda: self._fetch_telemetry_thread(log_paths, job_statuses),
+                            thread=True
+                        )
+                        telemetry_data = await worker.wait()
 
-            # 2. Run blocking telemetry calls (log reading, HTTP, SSH, condor) in a thread worker
-            worker = self.run_worker(
-                lambda: self._fetch_telemetry_thread(log_paths, job_statuses),
-                thread=True
-            )
-            telemetry_data = await worker.wait()
+                        if telemetry_data:
+                            self._process_telemetry_result(telemetry_data)
 
-            if telemetry_data:
-                self._process_telemetry_result(telemetry_data)
+            except WorkerCancelled:
+                break
+            except Exception as exc:
+                import traceback
+                self._show_error(repr(exc), traceback.format_exc())
 
-        except Exception as exc:
-            import traceback
-            self._show_error(repr(exc), traceback.format_exc())
+            await asyncio.sleep(delay)
 
     def _fetch_telemetry_thread(self, log_paths: List[str], job_statuses: Dict[str, Status]) -> Dict[str, Any]:
         """Runs in background thread: reads logs, queries prometheus/SSH, and queries condor."""

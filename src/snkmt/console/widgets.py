@@ -211,7 +211,7 @@ class WorkflowTable(DataTable):
 
     async def on_mount(self) -> None:
         self.last_update = datetime.now(timezone.utc)
-        self._refresh_table()
+        self.call_after_refresh(self._refresh_table)
         if self.app.refresh_interval > 0:  # type: ignore
             self.set_interval(self.app.refresh_interval, self.update_workflows)  # type: ignore
 
