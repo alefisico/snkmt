@@ -307,7 +307,9 @@ def db_prune(
             
             to_delete = []
             for w in workflows:
-                if before_date and (w.started_at is None or w.started_at >= before_date):
+                w_start = w.started_at.replace(tzinfo=None) if w.started_at else None
+                ref_date = before_date.replace(tzinfo=None) if before_date else None
+                if ref_date and (w_start is None or w_start >= ref_date):
                     continue
                 to_delete.append(w)
                 
