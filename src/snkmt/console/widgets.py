@@ -779,6 +779,7 @@ class CondorLogsPanel(Container):
     @work(exclusive=True)
     async def _refresh_logs(self) -> None:
         from snkmt.console.dask_monitor import find_condor_logs
+        from loguru import logger
         
         try:
             table = self.query_one("#condor-logs-table", DataTable)
@@ -786,51 +787,63 @@ class CondorLogsPanel(Container):
         except NoMatches:
             return
         
-        job = self.job_data
-        if job is None:
+        try:
+            job = self.job_data
+            if job is None:
+                table.display = False
+                placeholder.display = True
+                placeholder.update("Select a job to view Condor logs.")
+                return
+
+            placeholder.update("[dim]Scanning for Condor logs...[/dim]")
             table.display = False
             placeholder.display = True
-            placeholder.update("Select a job to view Condor logs.")
-            return
 
-        placeholder.update("[dim]Scanning for Condor logs...[/dim]")
-        table.display = False
-        placeholder.display = True
+            logger.debug(f"CondorLogsPanel: refreshing logs for job {job.id} (rule={job.rule_name})")
 
-        # Run file scanning and parsing in a thread worker
-        worker = self.run_worker(
-            lambda: find_condor_logs(job),
-            thread=True
-        )
-        logs = await worker.wait()
-
-        if not logs:
-            placeholder.update("[dim]No Condor logs detected for this job.[/dim]")
-            table.display = False
-            placeholder.display = True
-            return
-
-        placeholder.display = False
-        table.clear()
-        
-        # Add columns if not already added
-        if not table.columns:
-            table.add_columns("Log File", "Type", "Status", "Size")
-
-        for log in logs:
-            size_str = self._format_size(log["size"])
-            status_widget = StyledStatus(log["status"])
-            
-            # We store the file path as the row key
-            table.add_row(
-                log["name"],
-                log["type"],
-                status_widget,
-                size_str,
-                key=log["path"]
+            # Run file scanning and parsing in a thread worker
+            worker = self.run_worker(
+                lambda: find_condor_logs(job),
+                thread=True
             )
+            logs = await worker.wait()
+
+            logger.debug(f"CondorLogsPanel: found {len(logs) if logs else 0} logs for job {job.id}")
+
+            if not logs:
+                placeholder.update("[dim]No Condor logs detected for this job.[/dim]")
+                table.display = False
+                placeholder.display = True
+                return
+
+            placeholder.display = False
+            table.clear()
             
-        table.display = True
+            # Add columns if not already added
+            if not table.columns:
+                table.add_columns("Log File", "Type", "Status", "Size")
+
+            for log in logs:
+                size_str = self._format_size(log["size"])
+                status_widget = StyledStatus(log["status"])
+                
+                # We store the file path as the row key
+                table.add_row(
+                    log["name"],
+                    log["type"],
+                    status_widget,
+                    size_str,
+                    key=log["path"]
+                )
+                
+            table.display = True
+        except Exception as exc:
+            import traceback
+            logger.exception(f"Error in CondorLogsPanel._refresh_logs: {exc}")
+            error_msg = f"[red]Error loading Condor logs:[/red] {str(exc)}\n\n[dim]{traceback.format_exc()}[/dim]"
+            placeholder.update(error_msg)
+            table.display = False
+            placeholder.display = True
 
     def _format_size(self, size_bytes: int) -> str:
         if size_bytes < 1024:

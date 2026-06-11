@@ -264,8 +264,10 @@ def _get_clean_prefix(name: str) -> str:
 def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
     """Scan and find Condor logs (Dask worker logs or manual Condor logs) for a job."""
     from snkmt.types.enums import Status
+    from loguru import logger
     
     log_files = job.log_files
+    logger.debug(f"find_condor_logs: job {getattr(job, 'id', 'N/A')} has log_files: {[lf.path for lf in log_files]}")
     if not log_files:
         return []
 
@@ -274,6 +276,7 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
     for lf in log_files:
         path = lf.path
         if not os.path.exists(path):
+            logger.debug(f"find_condor_logs: log path does not exist: {path}")
             continue
         try:
             with open(path, "r", errors="replace") as f:
@@ -281,8 +284,10 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
                     m = WORKER_LOG_DIR_RE.search(line)
                     if m:
                         worker_log_dir = m.group(1)
+                        logger.debug(f"find_condor_logs: found worker_log_dir: {worker_log_dir} in {path}")
                         break
-        except OSError:
+        except OSError as e:
+            logger.warning(f"find_condor_logs: error reading {path}: {e}")
             pass
         if worker_log_dir:
             break
@@ -290,6 +295,7 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
     search_dirs = []
 
     if worker_log_dir and os.path.isdir(worker_log_dir):
+        logger.debug(f"find_condor_logs: adding worker_log_dir to search: {worker_log_dir}")
         search_dirs.append((worker_log_dir, None, None))
     else:
         # Manual HTCondor case: look in the same directory as the main log files
@@ -298,7 +304,10 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
             if os.path.isdir(dir_path):
                 stem = os.path.splitext(os.path.basename(lf.path))[0]
                 full_name = os.path.basename(lf.path)
+                logger.debug(f"find_condor_logs: adding manual dir to search: {dir_path} (stem: {stem})")
                 search_dirs.append((dir_path, stem, full_name))
+            else:
+                logger.debug(f"find_condor_logs: directory does not exist: {dir_path}")
 
     # Scan directories
     valid_exts = {".log", ".clog", ".out", ".err", ".stdout", ".stderr", ".sub", ".submit"}
@@ -306,6 +315,7 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
 
     for directory, stem, full_name in search_dirs:
         try:
+            logger.debug(f"find_condor_logs: scanning directory {directory}")
             for entry in os.scandir(directory):
                 if not entry.is_file():
                     continue
@@ -319,9 +329,13 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
                 elif ext not in valid_exts and ".condor" not in name.lower():
                     continue
 
+                logger.debug(f"find_condor_logs: found matching file: {name}")
                 scanned_files.append(entry)
-        except OSError:
+        except OSError as e:
+            logger.warning(f"find_condor_logs: error scanning {directory}: {e}")
             pass
+
+    logger.debug(f"find_condor_logs: total matched files: {len(scanned_files)}")
 
     # 2. Parse event log statuses
     job_statuses = {}  # {job_prefix: Status}
@@ -341,7 +355,9 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
                     status_str = parse_condor_event_status(content)
                     prefix = _get_clean_prefix(entry.name)
                     job_statuses[prefix] = Status(status_str)
-            except OSError:
+                    logger.debug(f"find_condor_logs: event log {entry.name} has status {status_str}")
+            except OSError as e:
+                logger.warning(f"find_condor_logs: error parsing event log {entry.name}: {e}")
                 pass
 
     # 3. Build results
@@ -384,4 +400,5 @@ def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
 
     # Sort results by name
     results.sort(key=lambda x: x["name"])
+    logger.debug(f"find_condor_logs: returning {len(results)} results")
     return results
