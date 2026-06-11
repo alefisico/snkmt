@@ -291,20 +291,23 @@ def db_prune(
         before_date = datetime.now(timezone.utc) - timedelta(days=days)
 
     if days is None and status is None:
-        typer.echo("Error: Please specify either --days (-d) or --status (-s) to select workflows to prune.", err=True)
+        typer.echo(
+            "Error: Please specify either --days (-d) or --status (-s) to select workflows to prune.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     async def run_prune():
         try:
             async_db = AsyncDatabase(db_path=db, create_db=False)
             repo = async_db.get_workflow_repository()
-            
+
             # Let's count how many match first
             workflows = await repo.list(
                 status=db_status,
                 limit=None,
             )
-            
+
             to_delete = []
             for w in workflows:
                 w_start = w.started_at.replace(tzinfo=None) if w.started_at else None
@@ -312,24 +315,24 @@ def db_prune(
                 if ref_date and (w_start is None or w_start >= ref_date):
                     continue
                 to_delete.append(w)
-                
+
             if not to_delete:
                 typer.echo("No workflows found matching the criteria.")
                 await async_db.close()
                 return
-                
+
             typer.echo(f"Found {len(to_delete)} workflows matching criteria.")
             if not force:
                 if not confirm("Are you sure you want to delete them?"):
                     typer.echo("Aborted.")
                     await async_db.close()
                     raise typer.Abort()
-            
+
             deleted_count = 0
             for w in to_delete:
                 if await repo.delete(w.id):
                     deleted_count += 1
-                    
+
             typer.echo(f"Successfully pruned {deleted_count} workflows.")
             await async_db.close()
         except Exception as e:

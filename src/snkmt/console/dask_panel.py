@@ -28,10 +28,10 @@ _HISTORY_MAXLEN = 60  # keep up to 60 samples (~60 s at 1 s poll rate)
 
 def _rich_bar(counts: dict) -> str:
     """Return a Rich-markup coloured progress bar."""
-    mem   = counts.get("memory",     0)
-    proc  = counts.get("processing", 0)
-    err   = counts.get("erred",      0)
-    wait  = counts.get("waiting",    0)
+    mem = counts.get("memory", 0)
+    proc = counts.get("processing", 0)
+    err = counts.get("erred", 0)
+    wait = counts.get("waiting", 0)
     total = mem + proc + err + wait
     if total == 0:
         return f"[dim]{'·' * BAR_WIDTH}[/dim]  [dim]Mem:  -%  Mem+Run:  -%[/dim]"
@@ -39,9 +39,9 @@ def _rich_bar(counts: dict) -> str:
     def cells(n: int) -> int:
         return max(0, int(round(n / total * BAR_WIDTH)))
 
-    n_mem  = cells(mem)
+    n_mem = cells(mem)
     n_proc = cells(proc)
-    n_err  = cells(err)
+    n_err = cells(err)
     n_wait = max(0, BAR_WIDTH - n_mem - n_proc - n_err)
 
     bar = (
@@ -75,9 +75,9 @@ def _throughput_eta(history: deque, counts: dict):
     if dt < 1:
         return None, None
     rate = (m_new - m_base) / dt
-    mem  = counts.get("memory",     0)
+    mem = counts.get("memory", 0)
     proc = counts.get("processing", 0)
-    wait = counts.get("waiting",    0)
+    wait = counts.get("waiting", 0)
     remaining = proc + wait
     eta = remaining / rate if remaining > 0 else 0.0
     return rate, eta
@@ -100,8 +100,8 @@ class DaskJobPanel(VerticalScroll):
     def __init__(self, repo: WorkflowRepository, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.repo = repo
-        self._metrics: dict = {}   # {job_name: {'counts': dict|None, 'status': str}}
-        self._history: dict[str, deque] = {}   # {job_name: deque[(ts, memory)]}
+        self._metrics: dict = {}  # {job_name: {'counts': dict|None, 'status': str}}
+        self._history: dict[str, deque] = {}  # {job_name: deque[(ts, memory)]}
         self._mounted = False
 
     def compose(self) -> ComposeResult:
@@ -153,8 +153,10 @@ class DaskJobPanel(VerticalScroll):
                     else:
                         # 2. Run blocking telemetry calls (log reading, HTTP, SSH, condor) in a thread worker
                         worker = self.run_worker(
-                            lambda: self._fetch_telemetry_thread(log_paths, job_statuses),
-                            thread=True
+                            lambda: self._fetch_telemetry_thread(
+                                log_paths, job_statuses
+                            ),
+                            thread=True,
                         )
                         telemetry_data = await worker.wait()
 
@@ -165,11 +167,14 @@ class DaskJobPanel(VerticalScroll):
                 break
             except Exception as exc:
                 import traceback
+
                 self._show_error(repr(exc), traceback.format_exc())
 
             await asyncio.sleep(delay)
 
-    def _fetch_telemetry_thread(self, log_paths: List[str], job_statuses: Dict[str, Status]) -> Dict[str, Any]:
+    def _fetch_telemetry_thread(
+        self, log_paths: List[str], job_statuses: Dict[str, Status]
+    ) -> Dict[str, Any]:
         """Runs in background thread: reads logs, queries prometheus/SSH, and queries condor."""
         scanned = scan_log_files(log_paths)
         new_metrics = {}
@@ -194,7 +199,7 @@ class DaskJobPanel(VerticalScroll):
             new_metrics[name] = {
                 "counts": counts,
                 "status": status,
-                "has_dashboard": bool(dashboard_url)
+                "has_dashboard": bool(dashboard_url),
             }
 
         # HTCondor worker counts
@@ -269,15 +274,27 @@ class DaskJobPanel(VerticalScroll):
             n_paused = counts.get("workers_paused", 0) if counts else 0
             name_str = (
                 f"[bold red]⚠ {escape(name)}[/bold red]"
-                if n_erred else
-                f"[bold]{escape(name)}[/bold]"
+                if n_erred
+                else f"[bold]{escape(name)}[/bold]"
             )
-            erred_str  = f"\n  [bold red]⚠ {n_erred} task{'s' if n_erred != 1 else ''} erred[/bold red]" if n_erred else ""
-            paused_str = f"\n  [bold yellow]⚠ {n_paused} worker{'s' if n_paused != 1 else ''} paused (memory pressure)[/bold yellow]" if n_paused else ""
+            erred_str = (
+                f"\n  [bold red]⚠ {n_erred} task{'s' if n_erred != 1 else ''} erred[/bold red]"
+                if n_erred
+                else ""
+            )
+            paused_str = (
+                f"\n  [bold yellow]⚠ {n_paused} worker{'s' if n_paused != 1 else ''} paused (memory pressure)[/bold yellow]"
+                if n_paused
+                else ""
+            )
 
             rate, eta = _throughput_eta(self._history.get(name, deque()), counts or {})
             if rate is not None:
-                eta_str = f"  [dim]~{_fmt_eta(eta)} remaining[/dim]" if eta else "  [dim]nearly done[/dim]"
+                eta_str = (
+                    f"  [dim]~{_fmt_eta(eta)} remaining[/dim]"
+                    if eta
+                    else "  [dim]nearly done[/dim]"
+                )
                 throughput_str = f"\n  [dim]{rate:.1f} tasks/s{eta_str}[/dim]"
             elif counts is not None:
                 throughput_str = "\n  [dim]measuring...[/dim]"
@@ -286,20 +303,28 @@ class DaskJobPanel(VerticalScroll):
 
             condor = info.get("condor")
             if condor:
-                idle, running, held = condor['idle'], condor['running'], condor['held']
-                held_str = f"[bold red]{held}H[/bold red]" if held else f"[dim]{held}H[/dim]"
-                idle_str = f"[yellow]{idle}I[/yellow]" if idle else f"[dim]{idle}I[/dim]"
+                idle, running, held = condor["idle"], condor["running"], condor["held"]
+                held_str = (
+                    f"[bold red]{held}H[/bold red]" if held else f"[dim]{held}H[/dim]"
+                )
+                idle_str = (
+                    f"[yellow]{idle}I[/yellow]" if idle else f"[dim]{idle}I[/dim]"
+                )
                 condor_str = f"\n  [dim]Condor:[/dim] {idle_str} [green]{running}R[/green] {held_str}"
             else:
                 condor_str = ""
 
-            lines.append(f"{name_str}\n  {bar}{erred_str}{paused_str}{throughput_str}{condor_str}")
+            lines.append(
+                f"{name_str}\n  {bar}{erred_str}{paused_str}{throughput_str}{condor_str}"
+            )
 
         content.update("\n\n".join(lines))
 
     def _show_error(self, short: str, detail: str) -> None:
         try:
             content = self.query_one("#dask-content", Static)
-            content.update(f"[red]Poll error:[/red] {escape(short)}\n\n[dim]{escape(detail)}[/dim]")
+            content.update(
+                f"[red]Poll error:[/red] {escape(short)}\n\n[dim]{escape(detail)}[/dim]"
+            )
         except NoMatches:
             pass

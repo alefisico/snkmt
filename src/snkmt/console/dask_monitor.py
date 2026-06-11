@@ -9,8 +9,12 @@ from typing import Dict, List, Any, Optional
 
 DASHBOARD_RE = re.compile(r"Dask dashboard:\s+(http://\S+)")
 PROXY_RE = re.compile(r"Dask dashboard:\s+/proxy/(\d+)")  # /proxy/PORT/status
-SCHEDULER_RE = re.compile(r"'tcp://([^']+)'")   # matches tcp://host:port inside Client repr
-COMPLETE_RE = re.compile(r"JOB EXECUTION COMPLETED SUCCESSFULLY|Dask performance report saved")
+SCHEDULER_RE = re.compile(
+    r"'tcp://([^']+)'"
+)  # matches tcp://host:port inside Client repr
+COMPLETE_RE = re.compile(
+    r"JOB EXECUTION COMPLETED SUCCESSFULLY|Dask performance report saved"
+)
 WORKER_LOG_DIR_RE = re.compile(r"Condor worker log directory: (\S+)")
 
 TASK_METRIC_RE = re.compile(r'dask_scheduler_tasks\{state="(\w+)"\}\s+([\d.]+)')
@@ -39,36 +43,43 @@ def scan_log_files(paths: List[str]) -> Dict[str, Dict[str, Any]]:
                 for line in f:
                     m = DASHBOARD_RE.search(line)
                     if m:
-                        info['dashboard'] = m.group(1).rstrip("/status").rstrip("/")
-                        info.pop('proxy_port', None)
-                        info.pop('done', None)  # new run started — clear stale completion
+                        info["dashboard"] = m.group(1).rstrip("/status").rstrip("/")
+                        info.pop("proxy_port", None)
+                        info.pop(
+                            "done", None
+                        )  # new run started — clear stale completion
                     else:
                         m = PROXY_RE.search(line)
                         if m:
-                            info['proxy_port'] = m.group(1)
-                            info.pop('done', None)  # new run started — clear stale completion
+                            info["proxy_port"] = m.group(1)
+                            info.pop(
+                                "done", None
+                            )  # new run started — clear stale completion
                     m = SCHEDULER_RE.search(line)
                     if m:
-                        info['scheduler'] = f"tcp://{m.group(1)}"
+                        info["scheduler"] = f"tcp://{m.group(1)}"
                     m = WORKER_LOG_DIR_RE.search(line)
                     if m:
-                        info['worker_log_dir'] = m.group(1)
+                        info["worker_log_dir"] = m.group(1)
                     if COMPLETE_RE.search(line):
-                        info['done'] = True
+                        info["done"] = True
         except OSError:
             pass
         if info:
-            info['log_path'] = os.path.abspath(path)
+            info["log_path"] = os.path.abspath(path)
             jobs[name] = info
     return jobs
 
 
-def resolve_dashboard_via_scheduler(scheduler_addr: str, timeout: int = 3) -> Optional[str]:
+def resolve_dashboard_via_scheduler(
+    scheduler_addr: str, timeout: int = 3
+) -> Optional[str]:
     """Connect to a running Dask scheduler and retrieve its dashboard URL."""
     if scheduler_addr in _dashboard_cache:
         return _dashboard_cache[scheduler_addr]
     try:
         from distributed import Client
+
         c = Client(scheduler_addr, timeout=timeout, set_as_default=False)
         url = c.dashboard_link.rstrip("/status").rstrip("/")
         c.close()
@@ -97,10 +108,11 @@ def query_metrics(base_url: str, timeout: int = 2) -> Optional[Dict[str, Any]]:
     for m in WORKER_METRIC_RE.finditer(text):
         worker_states[m.group(1)] = int(float(m.group(2)))
     if worker_states:
-        counts['workers'] = sum(worker_states.values())
-        counts['workers_busy'] = (worker_states.get('partially_saturated', 0)
-                                  + worker_states.get('saturated', 0))
-        counts['workers_paused'] = worker_states.get('paused', 0)
+        counts["workers"] = sum(worker_states.values())
+        counts["workers_busy"] = worker_states.get(
+            "partially_saturated", 0
+        ) + worker_states.get("saturated", 0)
+        counts["workers_paused"] = worker_states.get("paused", 0)
 
     return counts if counts else None
 
@@ -111,7 +123,7 @@ def query_metrics_remote(base_url: str, timeout: int = 5) -> Optional[Dict[str, 
     if counts is not None:
         return counts
 
-    host_match = re.match(r'https?://([^/:]+):(\d+)', base_url)
+    host_match = re.match(r"https?://([^/:]+):(\d+)", base_url)
     if not host_match:
         return None
     host, port = host_match.group(1), host_match.group(2)
@@ -120,12 +132,18 @@ def query_metrics_remote(base_url: str, timeout: int = 5) -> Optional[Dict[str, 
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "ControlMaster=auto",
-                "-o", f"ControlPath={_SSH_CTL_FMT}",
-                "-o", "ControlPersist=120",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "BatchMode=yes",
-                "-o", f"ConnectTimeout={timeout}",
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                f"ControlPath={_SSH_CTL_FMT}",
+                "-o",
+                "ControlPersist=120",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={timeout}",
                 host,
                 f"curl -sf --max-time {timeout} http://localhost:{port}/metrics",
             ],
@@ -146,30 +164,33 @@ def query_metrics_remote(base_url: str, timeout: int = 5) -> Optional[Dict[str, 
     for m in WORKER_METRIC_RE.finditer(text):
         worker_states[m.group(1)] = int(float(m.group(2)))
     if worker_states:
-        counts['workers'] = sum(worker_states.values())
-        counts['workers_busy'] = (worker_states.get('partially_saturated', 0)
-                                  + worker_states.get('saturated', 0))
-        counts['workers_paused'] = worker_states.get('paused', 0)
+        counts["workers"] = sum(worker_states.values())
+        counts["workers_busy"] = worker_states.get(
+            "partially_saturated", 0
+        ) + worker_states.get("saturated", 0)
+        counts["workers_paused"] = worker_states.get("paused", 0)
     return counts if counts else None
 
 
-_CONDOR_STATUS = {1: 'idle', 2: 'running', 5: 'held'}
+_CONDOR_STATUS = {1: "idle", 2: "running", 5: "held"}
 
 
-def condor_counts_for_jobs(scanned: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+def condor_counts_for_jobs(
+    scanned: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, int]]:
     """Return HTCondor worker counts per job based on worker log directories."""
     dir_to_job = {}
     for name, info in scanned.items():
-        wld = info.get('worker_log_dir')
+        wld = info.get("worker_log_dir")
         if wld:
-            dir_to_job[wld.rstrip('/')] = name
+            dir_to_job[wld.rstrip("/")] = name
 
     if not dir_to_job:
         return {}
 
     try:
         out = subprocess.check_output(
-            'condor_q -json',
+            "condor_q -json",
             shell=True,
             stderr=subprocess.DEVNULL,
             universal_newlines=True,
@@ -182,14 +203,16 @@ def condor_counts_for_jobs(scanned: Dict[str, Dict[str, Any]]) -> Dict[str, Dict
     counts = {}  # {job_name: {'idle': 0, 'running': 0, 'held': 0}}
 
     for j in all_jobs:
-        status = j.get('JobStatus', 0)
+        status = j.get("JobStatus", 0)
         key = _CONDOR_STATUS.get(status)
         if key is None:
             continue
-        out_path = j.get('Out', '') or j.get('Err', '')
+        out_path = j.get("Out", "") or j.get("Err", "")
         for wld, job_name in dir_to_job.items():
             if out_path.startswith(wld):
-                entry = counts.setdefault(job_name, {'idle': 0, 'running': 0, 'held': 0})
+                entry = counts.setdefault(
+                    job_name, {"idle": 0, "running": 0, "held": 0}
+                )
                 entry[key] += 1
                 break
 

@@ -317,7 +317,11 @@ class AsyncDatabase:
         )
 
         self.SessionLocal = async_sessionmaker(
-            autocommit=False, autoflush=True, bind=self.engine, class_=AsyncSession, expire_on_commit=False
+            autocommit=False,
+            autoflush=True,
+            bind=self.engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
         )
 
     # Delegate all sync operations to the sync database

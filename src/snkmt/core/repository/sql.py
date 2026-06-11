@@ -30,7 +30,9 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
     def __init__(self, session_factory: async_sessionmaker):
         self.async_session = session_factory
 
-    async def _resolve_real_snakefile(self, session, workflow_id: UUID) -> Optional[str]:
+    async def _resolve_real_snakefile(
+        self, session, workflow_id: UUID
+    ) -> Optional[str]:
         if workflow_id in self._snakefile_cache:
             return self._snakefile_cache[workflow_id]
 
@@ -98,7 +100,9 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
                 return None
             dto = self._workflow_to_dto(workflow)
             if dto.snakefile and "snakemake/workflow.py" in dto.snakefile:
-                real_snakefile = await self._resolve_real_snakefile(session, workflow.id)
+                real_snakefile = await self._resolve_real_snakefile(
+                    session, workflow.id
+                )
                 if real_snakefile:
                     dto.snakefile = real_snakefile
             return dto

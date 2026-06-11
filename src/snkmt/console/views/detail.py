@@ -39,6 +39,7 @@ class WorkflowDetailScreen(Screen):
         ("shift+tab", "focus_previous", "Previous"),
         ("r", "force_refresh", "Refresh"),
         ("m", "open_log_modal", "Expand log"),
+        ("c", "copy_log", "Copy Log"),
     ]
 
     def __init__(
@@ -71,6 +72,22 @@ class WorkflowDetailScreen(Screen):
         if self._current_log_path is None:
             return
         self.app.push_screen(LogFileModal(Path(self._current_log_path)))
+
+    def action_copy_log(self) -> None:
+        """Copy the current log file content to the clipboard."""
+        if self._current_log_path is None:
+            self.app.notify("No log file selected to copy.", severity="warning")
+            return
+        log_path = Path(self._current_log_path)
+        try:
+            if not log_path.exists():
+                self.app.notify("Error: Log file does not exist.", severity="error")
+                return
+            content = log_path.read_text(errors="replace")
+            self.app.copy_to_clipboard(content)
+            self.app.notify("Log copied to clipboard!", severity="information")
+        except Exception as e:
+            self.app.notify(f"Failed to copy log: {e}", severity="error")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-body"):
@@ -110,6 +127,7 @@ class WorkflowDetailScreen(Screen):
 
     def _check_logs_for_dask(self, log_paths: list[str]) -> bool:
         from snkmt.console.dask_monitor import scan_log_files
+
         scanned = scan_log_files(log_paths)
         return len(scanned) > 0
 
@@ -146,14 +164,14 @@ class WorkflowDetailScreen(Screen):
             log_paths = [lf.path for j in jobs for lf in j.log_files]
 
             is_dask = (
-                "condor" in cmd or 
-                "dask" in cmd or 
-                "runner.py" in cmd or 
-                "barista" in sf or 
-                "condor" in sf or 
-                "dask" in sf
+                "condor" in cmd
+                or "dask" in cmd
+                or "runner.py" in cmd
+                or "barista" in sf
+                or "condor" in sf
+                or "dask" in sf
             )
-            
+
             if not is_dask:
                 for path in log_paths:
                     path_lower = path.lower()
@@ -163,8 +181,7 @@ class WorkflowDetailScreen(Screen):
 
             if not is_dask and log_paths:
                 is_dask = await self.app.run_worker(
-                    lambda: self._check_logs_for_dask(log_paths),
-                    thread=True
+                    lambda: self._check_logs_for_dask(log_paths), thread=True
                 )
 
             if is_dask:
@@ -173,6 +190,7 @@ class WorkflowDetailScreen(Screen):
                     tabs.query_one("#tab-dask")
                 except NoMatches:
                     from snkmt.console.dask_panel import DaskJobPanel
+
                     panel = DaskJobPanel(self.repo, id="detail-dask")
                     panel.workflow_id = self.workflow_id
                     await tabs.add_pane(TabPane("Dask & Condor", panel, id="tab-dask"))

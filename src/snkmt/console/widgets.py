@@ -42,7 +42,6 @@ def render_progress_bar(progress: float, width: int = 8) -> Text:
     return Text(pct, style=color)
 
 
-
 class StyledStatus(Text):
     def __init__(self, status: Status) -> None:
         status_str = status.value.capitalize()
@@ -470,9 +469,7 @@ class WorkflowDetailOverview(Container):
             if not cmd_display and new_data.snakefile:
                 cmd_display = f"snakemake -s {new_data.snakefile}"
 
-            self.query_one("#overview-command", Label).update(
-                cmd_display or "N/A"
-            )
+            self.query_one("#overview-command", Label).update(cmd_display or "N/A")
         except NoMatches:
             pass
 
@@ -681,11 +678,26 @@ class ConfirmDeleteModal(ModalScreen[bool]):
 class LogFileModal(ModalScreen):
     """Modal to display log file text."""
 
-    BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
+    BINDINGS = [
+        ("escape", "app.pop_screen", "Pop screen"),
+        ("c", "copy_log", "Copy Log"),
+    ]
 
     def __init__(self, log_file: Path, *args: Any, **kwargs: Any) -> None:
         self.log_file = log_file
         super().__init__(*args, **kwargs)
+
+    def action_copy_log(self) -> None:
+        """Copy the log file content to the clipboard."""
+        try:
+            if not self.log_file.exists():
+                self.app.notify("Error: Log file does not exist.", severity="error")
+                return
+            content = self.log_file.read_text(errors="replace")
+            self.app.copy_to_clipboard(content)
+            self.app.notify("Log copied to clipboard!", severity="information")
+        except Exception as e:
+            self.app.notify(f"Failed to copy log: {e}", severity="error")
 
     def compose(self) -> ComposeResult:
         container = Container(id="modal-container")
