@@ -217,3 +217,171 @@ def condor_counts_for_jobs(
                 break
 
     return counts
+
+
+def parse_condor_event_status(content: str) -> str:
+    """Parse HTCondor event log content to determine status."""
+    lines = content.splitlines()
+    for line in reversed(lines):
+        if len(line) >= 5 and line[0:3].isdigit() and line[3] == " " and line[4] == "(":
+            event_code = line[0:3]
+            if event_code == "005":  # Terminated
+                if "Normal termination (return value 0)" in content:
+                    return "SUCCESS"
+                else:
+                    return "ERROR"
+            elif event_code in ("009", "012"):  # Aborted, Held
+                return "ERROR"
+            elif event_code == "001":  # Executing
+                return "RUNNING"
+    return "UNKNOWN"
+
+
+def _is_matching_condor_file(name: str, stem: str, full_name: str) -> bool:
+    name_lower = name.lower()
+    if name == full_name:
+        return False
+    if name.startswith(f"{full_name}."):
+        return True
+    if name.startswith(f"{stem}.") or name.startswith(f"{stem}_"):
+        return True
+    for ext in (".out", ".err", ".log", ".stdout", ".stderr", ".clog", ".sub", ".submit"):
+        if name_lower == f"{stem}{ext}":
+            return True
+    return False
+
+
+def _get_clean_prefix(name: str) -> str:
+    base = name
+    for ext in (".log", ".clog", ".out", ".err", ".stdout", ".stderr", ".sub", ".submit"):
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+    if base.endswith(".condor"):
+        base = base[:-7]
+    return base
+
+
+def find_condor_logs(job: Any) -> List[Dict[str, Any]]:
+    """Scan and find Condor logs (Dask worker logs or manual Condor logs) for a job."""
+    from snkmt.types.enums import Status
+    
+    log_files = job.log_files
+    if not log_files:
+        return []
+
+    # 1. Look for worker log dir (Dask cluster case)
+    worker_log_dir = None
+    for lf in log_files:
+        path = lf.path
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", errors="replace") as f:
+                for line in f:
+                    m = WORKER_LOG_DIR_RE.search(line)
+                    if m:
+                        worker_log_dir = m.group(1)
+                        break
+        except OSError:
+            pass
+        if worker_log_dir:
+            break
+
+    search_dirs = []
+
+    if worker_log_dir and os.path.isdir(worker_log_dir):
+        search_dirs.append((worker_log_dir, None, None))
+    else:
+        # Manual HTCondor case: look in the same directory as the main log files
+        for lf in log_files:
+            dir_path = os.path.dirname(os.path.abspath(lf.path))
+            if os.path.isdir(dir_path):
+                stem = os.path.splitext(os.path.basename(lf.path))[0]
+                full_name = os.path.basename(lf.path)
+                search_dirs.append((dir_path, stem, full_name))
+
+    # Scan directories
+    valid_exts = {".log", ".clog", ".out", ".err", ".stdout", ".stderr", ".sub", ".submit"}
+    scanned_files = []
+
+    for directory, stem, full_name in search_dirs:
+        try:
+            for entry in os.scandir(directory):
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                ext = os.path.splitext(name)[1].lower()
+                
+                # Apply filters for manual case
+                if stem and full_name:
+                    if not _is_matching_condor_file(name, stem, full_name):
+                        continue
+                elif ext not in valid_exts and ".condor" not in name.lower():
+                    continue
+
+                scanned_files.append(entry)
+        except OSError:
+            pass
+
+    # 2. Parse event log statuses
+    job_statuses = {}  # {job_prefix: Status}
+    event_logs = []
+
+    for entry in scanned_files:
+        ext = os.path.splitext(entry.name)[1].lower()
+        if ext in {".log", ".clog"}:
+            try:
+                with open(entry.path, "r", errors="replace") as f:
+                    first_lines = "".join(f.readline() for _ in range(5))
+                # HTCondor event logs start with event codes (e.g. "000 (")
+                if re.search(r"^\d{3}\s+\(", first_lines, re.MULTILINE):
+                    event_logs.append(entry)
+                    with open(entry.path, "r", errors="replace") as f:
+                        content = f.read()
+                    status_str = parse_condor_event_status(content)
+                    prefix = _get_clean_prefix(entry.name)
+                    job_statuses[prefix] = Status(status_str)
+            except OSError:
+                pass
+
+    # 3. Build results
+    results = []
+    for entry in scanned_files:
+        name = entry.name
+        path = entry.path
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+
+        # Determine status
+        status = Status.UNKNOWN
+        for prefix, s in job_statuses.items():
+            if _get_clean_prefix(name) == prefix:
+                status = s
+                break
+
+        # Determine type
+        ext = os.path.splitext(name)[1].lower()
+        if ext in {".out", ".stdout"}:
+            ftype = "Stdout"
+        elif ext in {".err", ".stderr"}:
+            ftype = "Stderr"
+        elif entry in event_logs:
+            ftype = "Event Log"
+        elif ext in {".sub", ".submit"}:
+            ftype = "Submit Config"
+        else:
+            ftype = "Log"
+
+        results.append({
+            "name": name,
+            "path": path,
+            "type": ftype,
+            "status": status,
+            "size": size
+        })
+
+    # Sort results by name
+    results.sort(key=lambda x: x["name"])
+    return results

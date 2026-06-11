@@ -25,6 +25,7 @@ from snkmt.console.widgets import (
     RuleTable,
     WorkflowDetailOverview,
     WorkflowErrors,
+    CondorLogsPanel,
 )
 from snkmt.core.repository import WorkflowRepository
 from snkmt.types.dto import JobDTO, WorkflowDTO
@@ -113,6 +114,9 @@ class WorkflowDetailScreen(Screen):
             with TabbedContent(id="detail-bottom-tabs"):
                 with TabPane("Logs", id="tab-logs"):
                     pass
+
+                with TabPane("Condor Logs", id="tab-condor-logs"):
+                    yield CondorLogsPanel(id="detail-condor-logs")
 
                 with TabPane("Resources", id="tab-resources"):
                     yield ResourcesPanel(id="detail-resources")
@@ -232,6 +236,12 @@ class WorkflowDetailScreen(Screen):
         try:
             resources_panel = self.query_one(ResourcesPanel)
             resources_panel.job_data = job
+        except NoMatches:
+            pass
+
+        try:
+            condor_panel = self.query_one("#detail-condor-logs", CondorLogsPanel)
+            condor_panel.job_data = job
         except NoMatches:
             pass
 

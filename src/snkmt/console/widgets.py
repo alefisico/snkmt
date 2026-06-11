@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, List, Optional, Union
 from uuid import UUID
-from textual import work
+from textual import work, on
 from textual.reactive import reactive
 from textual.css.query import NoMatches
 from textual.message import Message
@@ -759,3 +759,90 @@ class LogFileModal(ModalScreen):
             log_widget.write_line(
                 "An unexpected error occurred while reading the file."
             )
+
+
+class CondorLogsPanel(Container):
+    """Displays HTCondor logs (Dask worker logs or manual batch logs) for a selected job."""
+
+    job_data: reactive[Optional[JobDTO]] = reactive(None)
+
+    def compose(self) -> ComposeResult:
+        yield Label("Select a job to view Condor logs.", id="condor-placeholder")
+        table = DataTable(id="condor-logs-table")
+        table.cursor_type = "row"
+        table.display = False
+        yield table
+
+    async def watch_job_data(self, job: Optional[JobDTO]) -> None:
+        self._refresh_logs()
+
+    @work(exclusive=True)
+    async def _refresh_logs(self) -> None:
+        from snkmt.console.dask_monitor import find_condor_logs
+        
+        try:
+            table = self.query_one("#condor-logs-table", DataTable)
+            placeholder = self.query_one("#condor-placeholder", Label)
+        except NoMatches:
+            return
+        
+        job = self.job_data
+        if job is None:
+            table.display = False
+            placeholder.display = True
+            placeholder.update("Select a job to view Condor logs.")
+            return
+
+        placeholder.update("[dim]Scanning for Condor logs...[/dim]")
+        table.display = False
+        placeholder.display = True
+
+        # Run file scanning and parsing in a thread worker
+        worker = self.run_worker(
+            lambda: find_condor_logs(job),
+            thread=True
+        )
+        logs = await worker.wait()
+
+        if not logs:
+            placeholder.update("[dim]No Condor logs detected for this job.[/dim]")
+            table.display = False
+            placeholder.display = True
+            return
+
+        placeholder.display = False
+        table.clear()
+        
+        # Add columns if not already added
+        if not table.columns:
+            table.add_columns("Log File", "Type", "Status", "Size")
+
+        for log in logs:
+            size_str = self._format_size(log["size"])
+            status_widget = StyledStatus(log["status"])
+            
+            # We store the file path as the row key
+            table.add_row(
+                log["name"],
+                log["type"],
+                status_widget,
+                size_str,
+                key=log["path"]
+            )
+            
+        table.display = True
+
+    def _format_size(self, size_bytes: int) -> str:
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+    @on(DataTable.RowSelected, "#condor-logs-table")
+    def handle_row_selected(self, event: DataTable.RowSelected) -> None:
+        file_path = event.row_key.value
+        if file_path:
+            self.app.push_screen(LogFileModal(Path(file_path)))
+
