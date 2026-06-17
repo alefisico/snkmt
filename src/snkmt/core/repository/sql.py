@@ -33,12 +33,11 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
     async def _resolve_real_snakefile(
         self, session, workflow_id: UUID
     ) -> Optional[str]:
-        if workflow_id in self._snakefile_cache:
-            return self._snakefile_cache[workflow_id]
+        if workflow_id in SQLAlchemyWorkflowRepository._snakefile_cache:
+            return SQLAlchemyWorkflowRepository._snakefile_cache[workflow_id]
 
         import re
         import os
-        import glob
         from pathlib import Path
         from snkmt.core.models import Rule
 
@@ -51,34 +50,57 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
             return None
 
         # 2. Build the rule-to-file map of the workspace if not cached
-        if self._rule_map_cache is None:
+        if SQLAlchemyWorkflowRepository._rule_map_cache is None:
             rule_map = {}
-            patterns = ["**/*.smk", "**/Snakefile*"]
-            files = []
-            for pat in patterns:
-                files.extend(glob.glob(pat, recursive=True))
-
             rule_re = re.compile(r"^\s*rule\s+(\w+)\s*:")
 
-            for f in files:
-                if ".pixi" in f or "site-packages" in f or ".git" in f:
-                    continue
-                abs_path = os.path.abspath(f)
-                try:
-                    with open(abs_path, "r", errors="ignore") as file_obj:
-                        for line in file_obj:
-                            m = rule_re.match(line)
-                            if m:
-                                rule_name = m.group(1)
-                                rule_map.setdefault(rule_name, []).append(abs_path)
-                except OSError:
-                    pass
-            self._rule_map_cache = rule_map
+            exclude_dirs = {
+                ".git",
+                ".pixi",
+                ".venv",
+                ".snakemake",
+                "node_modules",
+                "__pycache__",
+                ".mypy_cache",
+                ".pytest_cache",
+                ".ruff_cache",
+                "build",
+                "dist",
+                "results",
+                "data",
+                "logs",
+                "output",
+                "outputs",
+                "resources",
+                "inputs",
+                "test_temp",
+            }
+
+            for root, dirs, files in os.walk("."):
+                # Prune excluded directories and hidden directories starting with "." in-place
+                dirs[:] = [
+                    d for d in dirs
+                    if d.lower() not in exclude_dirs and not d.startswith(".")
+                ]
+
+                for f in files:
+                    if f.endswith(".smk") or f.startswith("Snakefile"):
+                        abs_path = os.path.abspath(os.path.join(root, f))
+                        try:
+                            with open(abs_path, "r", errors="ignore") as file_obj:
+                                for line in file_obj:
+                                    m = rule_re.match(line)
+                                    if m:
+                                        rule_name = m.group(1)
+                                        rule_map.setdefault(rule_name, []).append(abs_path)
+                        except OSError:
+                            pass
+            SQLAlchemyWorkflowRepository._rule_map_cache = rule_map
 
         # 3. Score each .smk file by how many rules it matches
         scores = {}
         for rule in rule_names:
-            matching_files = self._rule_map_cache.get(rule, [])
+            matching_files = SQLAlchemyWorkflowRepository._rule_map_cache.get(rule, [])
             for f in matching_files:
                 scores[f] = scores.get(f, 0) + 1
 
@@ -87,7 +109,7 @@ class SQLAlchemyWorkflowRepository(WorkflowRepository):
 
         # Find the file with the highest match score
         best_file = max(scores, key=scores.get)
-        self._snakefile_cache[workflow_id] = best_file
+        SQLAlchemyWorkflowRepository._snakefile_cache[workflow_id] = best_file
         return best_file
 
     async def get(self, workflow_id: UUID) -> Optional[WorkflowDTO]:

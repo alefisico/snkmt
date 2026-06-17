@@ -309,3 +309,65 @@ async def test_workflow_prune(temp_db_path):
 
     await async_db.close()
 
+
+@pytest.mark.asyncio
+async def test_resolve_real_snakefile(temp_db_path):
+    import os
+    from uuid import uuid4
+    from datetime import datetime, timezone
+    from snkmt.types.dto import WorkflowDTO, CreateRuleDTO
+    from snkmt.types.enums import Status
+    from snkmt.core.repository.sql import SQLAlchemyWorkflowRepository
+
+    # Reset rule map cache first to ensure it scans
+    SQLAlchemyWorkflowRepository._rule_map_cache = None
+    SQLAlchemyWorkflowRepository._snakefile_cache = {}
+
+    # Create a dummy smk file in current dir
+    dummy_smk = "temp_resolve_test_workflow.smk"
+    with open(dummy_smk, "w") as f:
+        f.write("rule resolve_test_rule_1:\n    input: 'a'\n")
+
+    try:
+        async_db = AsyncDatabase(db_path=str(temp_db_path), create_db=True)
+        repo = async_db.get_workflow_repository()
+
+        wf_id = uuid4()
+        now = datetime.now(timezone.utc)
+        wf_dto = WorkflowDTO(
+            id=wf_id,
+            status=Status.RUNNING,
+            name="test_workflow",
+            snakefile="path/to/snakemake/workflow.py",
+            total_job_count=10,
+            jobs_finished=0,
+            started_at=now,
+            updated_at=now,
+            dryrun=False,
+        )
+
+        # Create workflow and rule
+        await repo.create(wf_dto)
+        await repo.create_rule(wf_id, CreateRuleDTO(name="resolve_test_rule_1", total_job_count=5))
+
+        # Retrieve workflow - should resolve real snakefile
+        wf = await repo.get(wf_id)
+        assert wf is not None
+        assert wf.snakefile is not None
+        assert wf.snakefile.endswith(dummy_smk)
+
+        # Verify caching works - modify rule_map_cache and check it is used
+        assert SQLAlchemyWorkflowRepository._rule_map_cache is not None
+        SQLAlchemyWorkflowRepository._rule_map_cache["resolve_test_rule_1"] = ["/fake/path/fake.smk"]
+        # Clear snakefile cache to force resolution again
+        SQLAlchemyWorkflowRepository._snakefile_cache = {}
+        wf = await repo.get(wf_id)
+        assert wf is not None
+        assert wf.snakefile == "/fake/path/fake.smk"
+
+        await async_db.close()
+    finally:
+        if os.path.exists(dummy_smk):
+            os.remove(dummy_smk)
+
+
